@@ -2,10 +2,10 @@
 This application implements a tree view using Python and has advanced features (shortcuts, active functions, and Excel import).  It allows you to work more efficiently than existing explorers.
 
 
-# Python ファイルエクスプローラー（VSCode風）
+# Python ファイルツリーエクスプローラー
 
 このアプリは PyQt5 を用いて構築された、シンプルで直感的な ファイルエクスプローラーです。  
-VSCode のサイドバーのような使いやすさを目指して設計されています。
+サイドバーのような使いやすさかつ機能性重視を目指して設計しました。
 
 ![Image 1](/image/tree_viewer01.png)
 

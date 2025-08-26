@@ -19,6 +19,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap,QTextOption
 from PyQt5.QtCore import Qt, QDir, QPoint,QTimer, QEvent
 import qdarkstyle
+from pathlib import Path
+
 
 VERSION = "Vβ01"
 
@@ -68,7 +70,7 @@ def save_config(shortcuts):
         QMessageBox.critical(None, "エラー", f"コンフィグ保存エラー:\n{e}")
 
 class RegisterDialog(QDialog):
-    def __init__(self, on_submit, default_base_path):
+    def __init__(self, on_submit, default_base_name, default_bunrui ,default_base_path):
         super().__init__()
         self.setWindowTitle("ショートカット登録")
         self.resize(400, 200)
@@ -81,14 +83,18 @@ class RegisterDialog(QDialog):
         name_layout = QHBoxLayout()
         name_layout.addWidget(QLabel("名前:"))
         self.name_edit = QLineEdit()
+        self.name_edit.setText(default_base_name)
         name_layout.addWidget(self.name_edit)
+        
         layout.addLayout(name_layout)
 
         # 分類
         category_layout = QHBoxLayout()
         category_layout.addWidget(QLabel("分類:"))
         self.category_edit = QLineEdit()
+        self.category_edit.setText(default_bunrui)
         category_layout.addWidget(self.category_edit)
+
         layout.addLayout(category_layout)
 
         # フルパス（複数行対応）
@@ -144,8 +150,9 @@ class FileExplorer(QMainWindow):
         self.setWindowTitle("tree viewer")
         self.setGeometry(0, 0, 340, 1200)
 
+        self.setAcceptDrops(True)  # ドラッグ&ドロップを受け付ける
 
-
+        self.catagory_bunrui = ""
 
         self.current_path = QDir.homePath()
         self.favorites = []
@@ -232,11 +239,6 @@ class FileExplorer(QMainWindow):
         # ラベル（中間）
         self.label = QLabel("アクティブビュー")
 
-
-        #self.label.setAlignment(Qt.AlignLeft)  
-        #self.label.setMaximumHeight(30)
-        #self.label.setStyleSheet("background-color: #f0f0f0; padding: 5px;")
-
         self.memo = QTextEdit()
         self.memo.setPlaceholderText("ショートカット")
         # スプリッターにウィジェット追加
@@ -292,6 +294,11 @@ class FileExplorer(QMainWindow):
         open_dir.triggered.connect(self.select_directory)
         file_menu.addAction(open_dir)
 
+        treetext_out = QAction("ツリー出力", self)
+        treetext_out.triggered.connect(self.show_tree_in_messagebox)
+        file_menu.addAction(treetext_out)
+
+        
 
         exit_action = QAction("終了", self)
         exit_action.triggered.connect(self.close)
@@ -1051,14 +1058,22 @@ class FileExplorer(QMainWindow):
     def open_register_dialog(self,path):
         if not(path):
             path = r"C:/"
-        def on_submit(name, category, path):
+        if os.path.isdir(path):
             
+            name = os.path.basename(os.path.dirname(path))
+            
+        else:
+            file_and_extension = os.path.basename(path)
+            name, extension = os.path.splitext(file_and_extension)
+
+        def on_submit(name, category, path):
+            self.catagory_bunrui = category
             self.shortcuts.append((name, category, path))
             save_config(self.shortcuts)
             self.populate_shortcut()
             QMessageBox.information(self, "登録完了", "ショートカットを登録しました。")
 
-        dialog = RegisterDialog(on_submit,path)
+        dialog = RegisterDialog(on_submit,name,self.catagory_bunrui,path)
         dialog.exec_()
 
     def populate_shortcut(self):
@@ -1087,15 +1102,30 @@ class FileExplorer(QMainWindow):
             QMessageBox.critical(self, "エラー", f"コンフィグ読み込みエラー:\n{e}")
 
     def open_item(self, item, column):
-        path = item.data(0, Qt.UserRole)
-        if path:
-            try:
-                if(path in [".xls", ".xlsx"] or os.path.exists(path)):
-                    self.on_tree_load_clicked(path)
-                else:
-                    os.startfile(path)
-            except Exception as e:
-                QMessageBox.critical(self, "エラー", f"ファイルを開けません:\n{e}")
+        
+        try:
+            path = item.data(0, Qt.UserRole)
+            #print(path)
+            if path:
+
+                #if(path in [".xls", ".xlsx"] or os.path.exists(path)):
+                    if(os.path.isdir(path)):
+                        
+                        self.go_up()
+                        self.on_tree_load_clicked(path)
+                    elif(os.path.isfile(path)):
+                        #self.go_up()
+                        
+                        if( path.endswith((".xls", ".xlsx"))):
+                            self.go_up()
+                            self.on_tree_load_clicked(path)
+                        else:
+                            
+                            os.startfile(path)
+        except Exception as e:
+            print(e)
+            pass
+            #QMessageBox.critical(self, "エラー", f"ファイルを開けません:\n{e}")
 
 
     def classify_path(self, exe_name):
@@ -1119,27 +1149,100 @@ class FileExplorer(QMainWindow):
             return "エクスプローラー"
     
     def shortcut_menu(self, position):
-        index = self.tree_widget.indexAt(position)
-        if not index.isValid():
-            return
-        path = index.data(Qt.UserRole)
+        try:
+            index = self.tree_widget.indexAt(position)
+            if not index.isValid():
+                return
+            path = index.data(Qt.UserRole)
 
-        menu = QMenu()
-        if(path in [".xls", ".xlsx"] or os.path.exists(path)):
+            menu = QMenu()
+            if(path in [".xls", ".xlsx"] or os.path.exists(path)):
 
-            open_action = QAction("ツリービューに反映", self)
-            open_action.triggered.connect(lambda: self.on_tree_load_clicked(path))
-            menu.addAction(open_action)
+                open_action = QAction("ツリービューに反映", self)
+                open_action.triggered.connect(lambda: self.on_tree_load_clicked(path))
+                menu.addAction(open_action)
+                
+                menu.addSeparator()
             
-            menu.addSeparator()
+            newopen_action = QAction("デフォルトのアプリで開く", self)
+            newopen_action.triggered.connect(lambda: os.startfile(path))
+            menu.addAction(newopen_action)
+
+            menu.exec_(self.tree_widget.viewport().mapToGlobal(position))
+        except Exception as e:
+            pass
+
+    #新規
+    # ドラッグ受け入れ
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    # ドロップ処理
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls:
+            path = urls[0].toLocalFile()
+            self.open_register_dialog(path)
+            #print(path)
+
+    def show_tree_in_messagebox(self):
+        """現在のツリーをテキスト化してメッセージボックスで表示"""
+        text = self.collect_tree_text()
         
-        newopen_action = QAction("デフォルトのアプリで開く", self)
-        newopen_action.triggered.connect(lambda: os.startfile(path))
-        menu.addAction(newopen_action)
+        from PyQt5.QtWidgets import QMessageBox, QTextEdit
+        
+        box = QMessageBox(self)
+        box.setWindowTitle("ツリー出力")
+        box.setIcon(QMessageBox.Information)
 
-        menu.exec_(self.tree_widget.viewport().mapToGlobal(position))
+        edit = QTextEdit()
+        edit.setPlainText(text)
+        edit.setReadOnly(True)
+        edit.setMinimumSize(600, 400)  # スクロール可能にする
+        box.layout().addWidget(edit, 1, 0, 1, box.layout().columnCount())
+        box.exec_()
+
+    def collect_tree_text(self, index=None, indent=0) -> str:
+        """再帰的にツリーの「表示名」を文字列化"""#編集
+
+        """Excelのシート一覧をprint出力"""
+
+        try:
+            lines = []
+            if(self.excel_openflag):
+                pythoncom.CoInitialize()
+                excel = win32com.client.GetActiveObject("Excel.Application")
+                wb = excel.ActiveWorkbook
+                #print("📑 開いているシート一覧:")
+                for sheet in wb.Sheets:
+                    lines.append(sheet.Name)
+                return "\n".join(l for l in lines if l)
+            else:
+                
+                if index is None:
+                    index = self.tree.rootIndex()
+
+                # ルート直下のアイテムを取得
+                name = self.model.fileName(index)
+                if name:  # ルートは空文字のことがある
+                    lines.append("    " * indent + name)
+
+                rows = self.model.rowCount(index)
+                for row in range(rows):
+                    child = self.model.index(row, 0, index)
+                    lines.append(self.collect_tree_text(child, indent + 1))
+
+                return "\n".join(l for l in lines if l)
+        except Exception as e:
+            print("取得できません:", e)
 
 
+
+
+    # --- Tree interactions ---
+    def index_to_path(self, index) -> Path:
+        return Path(self.model.filePath(index))
 
 def show_save_dialog(defult_name):
     window_saveas = QWidget()
@@ -1158,6 +1261,7 @@ def show_save_dialog(defult_name):
     else:
         print("キャンセルされました")
         return None
+
 
 
 

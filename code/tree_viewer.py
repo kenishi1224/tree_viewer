@@ -14,15 +14,30 @@ import win32com.client
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QMenuBar, QTextEdit,
     QTreeWidget,QAction, QFileDialog, QInputDialog, QPushButton, QHBoxLayout, QLineEdit,QTextEdit,
-    QMessageBox, QTreeView, QFileSystemModel, QMenu, QSplitter, QLabel, QAbstractItemView, QDialog, QTreeWidgetItem
+    QMessageBox, QTreeView, QFileSystemModel, QMenu, QSplitter, QLabel, QAbstractItemView, QDialog, QTreeWidgetItem,QFileIconProvider,QSizePolicy
 )
-from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap,QTextOption
+from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap,QTextOption,QPixmapCache
 from PyQt5.QtCore import Qt, QDir, QPoint,QTimer, QEvent
 import qdarkstyle
 from pathlib import Path
+import json
+from qt_material import apply_stylesheet
+import qtmodern.styles
+import qtmodern.windows
+import datetime
 
+default_cfg = {
+    "firstpass": "C:/",
+    "active":True,
+    "tree":True,
+    "short":True,
+    "theme": 1,
+    "excel": True,
+    "size": 10,
+    "front": True
+}
 
-VERSION = "Vβ01"
+VERSION = "Va02"
 
 EXCEL_APP = "Ket.Application"
 #EXCEL_APP = "Excel.Application"
@@ -46,13 +61,18 @@ class WindowInfo:
 
 #config登録と保存----------------------------------------------------------------------------------------
 CONFIG_FILE = "shortcut.config"
+HISTRY_FILE = "histry.config"
+
 
 def load_config():
     shortcuts = []
-    if not os.path.exists(CONFIG_FILE):
+    cwdpath = os.getcwd()
+    cwdfilepath = cwdpath + "/" + CONFIG_FILE
+
+    if not os.path.exists(cwdfilepath):
         return shortcuts
     try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        with open(cwdfilepath, "r", encoding="utf-8") as f:
             reader = csv.reader(f)
             for row in reader:
                 if len(row) == 3:
@@ -61,9 +81,38 @@ def load_config():
         QMessageBox.critical(None, "エラー", f"コンフィグ読み込みエラー:\n{e}")
     return shortcuts
 
+def load_histry():
+    shortcuts = []
+    cwdpath = os.getcwd()
+    cwdfilepath = cwdpath + "/" + HISTRY_FILE
+
+
+    if not os.path.exists(cwdfilepath):
+        return shortcuts
+    try:
+        with open(cwdfilepath, "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) == 3:
+                    shortcuts.append(tuple(row))
+    except Exception as e:
+        QMessageBox.critical(None, "エラー", f"コンフィグ読み込みエラー:\n{e}")
+    return shortcuts
+
+
+
+
 def save_config(shortcuts):
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerows(shortcuts)
+    except Exception as e:
+        QMessageBox.critical(None, "エラー", f"コンフィグ保存エラー:\n{e}")
+
+def save_histry(shortcuts):
+    try:
+        with open(HISTRY_FILE, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
             writer.writerows(shortcuts)
     except Exception as e:
@@ -115,6 +164,8 @@ class RegisterDialog(QDialog):
         layout.addWidget(browse_btn)
 
 
+
+
         browse_btn = QPushButton("参照")
 
 
@@ -148,9 +199,24 @@ class FileExplorer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("tree viewer")
-        self.setGeometry(0, 0, 340, 1200)
+        self.setGeometry(0, 0, 300, 1200)
 
         self.setAcceptDrops(True)  # ドラッグ&ドロップを受け付ける
+        QPixmapCache.setCacheLimit(51200)
+        
+
+        self.qApp = QApplication.instance()
+        self.qApp.applicationStateChanged.connect(self.on_app_state_changed)
+
+
+
+        self.cfg = ConfigManager("setting.json", default_data=default_cfg)
+
+        self.history = []       # 移動したパスを格納
+        self.history_index = -1 # 現在の位置を指す
+
+        
+
 
         self.catagory_bunrui = ""
 
@@ -160,6 +226,7 @@ class FileExplorer(QMainWindow):
         self.excel_enabled = True
         self.excel_openflag = False
         
+        self.pastpass = False
 
         self.excel_tabs_visible = False
 
@@ -170,39 +237,89 @@ class FileExplorer(QMainWindow):
         self.clipboard_cut = False
         self.excel_app = None
         self.current_workbook = None
+
+        self.last_open_path = None
+
         central = QWidget()
         self.setCentralWidget(central)
         self.layout = QVBoxLayout(central)
 
 
-        top_bar = QSplitter(Qt.Horizontal)
-        self.back_button = QPushButton("⬅ 上に戻る")
-        self.back_button.setFixedWidth(120)
-        self.back_button.setFixedHeight(30)
-        self.back_button.clicked.connect(self.go_up)
+        self.top_bar = QSplitter(Qt.Horizontal)
+
+
+
+        self.back_button = QPushButton("⬅ 上のディレクトリ")
+        self.back_button.setFixedHeight(30)  # 高さだけ固定
+        self.back_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
         self.path_label = QLabel()
-        top_bar.addWidget(self.back_button)
-        top_bar.addWidget(self.path_label)
+        self.path_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        self.top_bar.addWidget(self.back_button)
+        self.top_bar.addWidget(self.path_label)
+
+        self.top_bar.setStretchFactor(0, 0)  # back_button 固定
+        self.top_bar.setStretchFactor(1, 1)  # path_label が伸びる        
+
+        self.back_button.clicked.connect(self.go_up)
 
 
+        #undervar
+        self.under_bar = QSplitter(Qt.Horizontal)
+        self.undo_button = QPushButton("🔙戻る")
+        self.undo_button.setFixedWidth(120)
+        self.undo_button.setFixedHeight(30)
+        self.undo_button.clicked.connect(self.go_back)
+        
+
+        self.reload_button = QPushButton("🔄リロード")
+        self.reload_button.setFixedWidth(120)
+        self.reload_button.setFixedHeight(30)
+        self.reload_button.clicked.connect(self.reload_model)
+
+
+        self.redo_button = QPushButton("進む🔜")
+        self.redo_button.setFixedWidth(120)
+        self.redo_button.setFixedHeight(30)
+        self.redo_button.clicked.connect(self.go_forward)
+        self.path_label2 = QLabel()
+
+        self.under_bar.addWidget(self.reload_button)
+        self.under_bar.addWidget(self.redo_button)
+        
+        self.under_bar.addWidget(self.path_label2)
 
 
         #ツリービューの設定
         self.model = QFileSystemModel()
         self.model.setRootPath(self.current_path)
         self.tree = QTreeView()
+        
         self.tree.setModel(self.model)
+
         self.tree.setRootIndex(self.model.index(self.current_path))
-        self.tree.setColumnWidth(0, 300)
+        
+        #self.tree.setColumnWidth(0, 300)
+        self.tree.setSortingEnabled(True)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
         self.tree.clicked.connect(self.on_tree_clicked)
         self.tree.doubleClicked.connect(self.on_tree_double_clicked)
 
         #ツリーアイテムの設定
         self.tree_item = QTreeView()
-        self.layout.addWidget(self.tree_item)
 
+        self.shortcut_bar = QSplitter(Qt.Horizontal)
+        self.shortcut_button = QPushButton("🔎ショートカット")
+        #self.shortcut_button.setFixedWidth(120)
+        self.shortcut_button.setFixedHeight(30)
+        self.shortcut_button.clicked.connect(self.shortcut_setting_changed)
+
+
+        self.layout.addWidget(self.tree_item)
+        self.tree_item .setSortingEnabled(True)
         self.models = QStandardItemModel()
         self.models.setHorizontalHeaderLabels(['ウィンドウタイトル'])
         self.tree_item.setModel(self.models)
@@ -225,6 +342,8 @@ class FileExplorer(QMainWindow):
         #ショートカットビューの設定   
         self.shortcuts = load_config()
 
+        self.histry_index = load_histry()
+
         self.tree_widget = QTreeWidget()
         self.tree_widget.setHeaderHidden(True)
         self.tree_widget.itemDoubleClicked.connect(self.open_item)
@@ -235,74 +354,146 @@ class FileExplorer(QMainWindow):
 
 
         # スプリッター（上下）
-        splitter = QSplitter(Qt.Vertical)
+        self.splitter = QSplitter(Qt.Vertical)
         # ラベル（中間）
         self.label = QLabel("アクティブビュー")
 
         self.memo = QTextEdit()
         self.memo.setPlaceholderText("ショートカット")
         # スプリッターにウィジェット追加
-        splitter.addWidget(self.label)
-        splitter.addWidget(self.tree_item)
-        splitter.addWidget(top_bar)
 
-        splitter.addWidget(self.tree)
+
+        self.splitter.addWidget(self.label)
+        self.splitter.addWidget(self.tree_item)
+        self.splitter.addWidget(self.top_bar)
+        self.splitter.addWidget(self.under_bar)
+        self.splitter.addWidget(self.tree)
+        #
         self.label2 = QLabel("ショートカット")
-        splitter.addWidget(self.label2)
-        splitter.addWidget(self.tree_widget)
+        self.splitter.addWidget(self.shortcut_button)
+        self.splitter.addWidget(self.tree_widget)
         
 
         # ラベルが大きくなりすぎないように制限
         self.label2.setMaximumHeight(30)
 
         # ストレッチ設定（ラベルは固定）
-        splitter.setStretchFactor(0, 0)  # ラベル
-        splitter.setStretchFactor(1, 2)  # ツリーアイテム
-        splitter.setStretchFactor(2, 0)  # ラベル
-        splitter.setStretchFactor(3, 3)  # ツリービュー
-        splitter.setStretchFactor(4, 0)  # ラベル
-        splitter.setStretchFactor(5, 2)  # シュートカットビュー
+        self.splitter.setStretchFactor(0, 0)  # ラベル
+        self.splitter.setStretchFactor(1, 2)  # ツリーアイテム
+        self.splitter.setStretchFactor(2, 0)  # ラベル
+        self.splitter.setStretchFactor(3, 0)  # ラベル
+        self.splitter.setStretchFactor(4, 2)  # ツリービュー
+        self.splitter.setStretchFactor(5, 0)  # ラベル
+        self.splitter.setStretchFactor(6, 2)  # シュートカットビュー
 
-        self.layout.addWidget(splitter)
+        self.layout.addWidget(self.splitter)
 
         self.menu_bar = QMenuBar()
         self.setMenuBar(self.menu_bar)
         self.setup_menus()
         
+        
+        
+
 
         start_path = os.getcwd()
+        start_path =self.cfg.get("path")
+
         self.model.setRootPath(start_path)
         self.tree.setRootIndex(self.model.index(start_path))
         self.current_path = start_path
         self.update_path_label()
 
-        # タイマーで定期更新#編集
+        # タイマーで定期更新
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.check_active)
         self.timer.start(5000)  # 10秒ごと
     
+        #スリープ監視
+        self.idle_timer = QTimer(self)
+        self.idle_timer.timeout.connect(self.go_idle)
+        self.reset_idle_timer()
+
+        # ユーザー操作検知（ツリー操作時にタイマーリセット）
+        self.tree.clicked.connect(self.reset_idle_timer)
+        self.tree.doubleClicked.connect(self.reset_idle_timer)
+
+        #waitモードか？
+        self.reset_waitmode = False
+
+        self.change_font_size(False)
+        #self.view_change()
+
+    def reset_idle_timer(self):
+        self.idle_timer.start(5 * 60 * 1000)  # 5分
+
+    def go_idle(self):
+        """リソースを解放して休止状態にする"""
+
+        self.reset_waitmode = True
+        self.tree.setModel(None)
+        QPixmapCache.clear()
+        #print("Tree cleared (idle mode)")
+
+    def wake_up(self):
+        """ユーザーが操作した時に復帰する"""
+        #print(self.last_open_path)
+        if(self.reset_waitmode):
+            self.reset_waitmode = False
+            self.tree.setModel(self.model)
+            if  not self.last_open_path :
+                start_path =self.cfg.get("path")
+
+                self.model.setRootPath(start_path)
+                self.tree.setRootIndex(self.model.index(start_path))
+            else:
+                self.on_tree_load_clicked(self.last_open_path,False)
+            self.tree.viewport().update()
+            print(f"Tree restored to {self.last_open_path}")
+    def enterEvent(self,e):
+        if(self.reset_waitmode):
+            self.wake_up()
+    
+    def on_app_state_changed(self, state):
+        if state == Qt.ApplicationActive:
+            # スリープ復帰後に再描画やリロード
+            if self.current_path and os.path.exists(self.current_path):
+                self.tree.setRootIndex(self.model.index(self.current_path))
+                self.tree.viewport().update()
+
+
+
+    def reload_model(self):
+        self.wake_up()
+        self.model.setRootPath(self.current_path)
+        self.tree.setRootIndex(self.model.index(self.current_path))
+        
+        self.tree.viewport().update()   # ビューポートを強制再描画
+        self.tree.update()              # ツリービュー全体を再描画
+
     def check_active(self):
         if QApplication.activeWindow() is None:
             self.populate_windows()
+            self.tree.blockSignals(False)
 
 
 
     def setup_menus(self):
-        file_menu = self.menu_bar.addMenu("ファイル")
+        self.file_menu = self.menu_bar.addMenu("ファイル")
 
         open_dir = QAction("別のディレクトリを開く", self)
         open_dir.triggered.connect(self.select_directory)
-        file_menu.addAction(open_dir)
+        self.file_menu.addAction(open_dir)
 
         treetext_out = QAction("ツリー出力", self)
         treetext_out.triggered.connect(self.show_tree_in_messagebox)
-        file_menu.addAction(treetext_out)
+        self.file_menu.addAction(treetext_out)
 
         
 
         exit_action = QAction("終了", self)
         exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
+        self.file_menu.addAction(exit_action)
 
         self.favorite_menu = self.menu_bar.addMenu("お気に入り")
 
@@ -323,37 +514,180 @@ class FileExplorer(QMainWindow):
         self.favorite_menu.addAction(config_update_action)
 
 
-        tool_menu = self.menu_bar.addMenu("ツール")
+
+        self.setting_menu = self.menu_bar.addMenu("設定")
+
+        
+        first_open_action = QAction("最初に開くフォルダ", self)
+        
+        first_open_action.triggered.connect(self.first_open_flag)
+        self.setting_menu.addAction(first_open_action)
+
 
         font_size_action = QAction("文字サイズを変更", self)
-        font_size_action.triggered.connect(self.change_font_size)
-        tool_menu.addAction(font_size_action)
+        font_size_action.triggered.connect(lambda:self.change_font_size(True))
+        self.setting_menu.addAction(font_size_action)
 
         topmost_action = QAction("常に前面に表示", self, checkable=True)
-        topmost_action.setChecked(True) 
+        
+
+        flag = self.cfg.get("front")
+        topmost_action.setChecked(flag) 
         topmost_action.triggered.connect(self.toggle_always_on_top)
-        tool_menu.addAction(topmost_action)
+        self.setting_menu.addAction(topmost_action)
 
         self.toggle_always_on_top(Qt.Checked)
 
         excel_toggle = QAction("Excelを読み込む", self, checkable=True)
-        excel_toggle.setChecked(True) 
+        flag = self.cfg.get("excel")
+        excel_toggle.setChecked(flag) 
         excel_toggle.triggered.connect(self.toggle_excel)
-        tool_menu.addAction(excel_toggle)
+        self.setting_menu.addAction(excel_toggle)
 
+        self.setting_menu.addSeparator()
+
+        self.active_toggle = QAction("アクティブビュー", self, checkable=True)
+        #excel_toggle.setChecked(self.cfg.get("active")) 
+        flag = self.cfg.get("active")
+        self.active_toggle.setChecked(flag) 
+        self.active_toggle.triggered.connect(self.view_change)
+        self.setting_menu.addAction(self.active_toggle)
+
+        self.tree_toggle = QAction("ツリービュー", self, checkable=True)
+        #excel_toggle.setChecked(self.cfg.get("tree")) 
+        flag = self.cfg.get("tree")
+        self.tree_toggle.setChecked(flag)         
+        self.tree_toggle.triggered.connect(self.view_change)
+        self.setting_menu.addAction(self.tree_toggle)
+
+        self.short_toggle = QAction("ショートカットビュー", self, checkable=True)
+        #excel_toggle.setChecked(self.cfg.get("short")) 
+        flag = self.cfg.get("short")
+        self.short_toggle.setChecked(flag)   
+        self.short_toggle.triggered.connect(self.view_change)
+        self.setting_menu.addAction(self.short_toggle)
+
+
+
+        self.setting_menu.addSeparator()
+
+        self.num = cfg.get("theme")
+
+        theme1_toggle = QAction("ノーマルテーマ", self, checkable=True)
+        theme1_toggle.triggered.connect(lambda:self.toggle_theme(1))
+        if(self.num == 1):
+            theme1_toggle.setChecked(True) 
+        else:
+            theme1_toggle.setChecked(False) 
+        self.setting_menu.addAction(theme1_toggle)
+
+        theme2_toggle = QAction("ダークテーマ", self, checkable=True)
+        theme2_toggle.triggered.connect(lambda:self.toggle_theme(2))
+        if(num == 2):
+            theme2_toggle.setChecked(True) 
+        else:
+            theme2_toggle.setChecked(False) 
+        self.setting_menu.addAction(theme2_toggle)
+
+        theme3_toggle = QAction("ライトマテリアル", self, checkable=True)
+        theme3_toggle.triggered.connect(lambda:self.toggle_theme(3))
+        if(num == 3):
+            theme3_toggle.setChecked(True) 
+        else:
+            theme3_toggle.setChecked(False) 
+        self.setting_menu.addAction(theme3_toggle)
+
+        theme4_toggle = QAction("ダークマテリアル", self, checkable=True)
+        theme4_toggle.triggered.connect(lambda:self.toggle_theme(4))
+        if(num == 4):
+            theme4_toggle.setChecked(True) 
+        else:
+            theme4_toggle.setChecked(False) 
+        self.setting_menu.addAction(theme4_toggle)
+
+        theme5_toggle = QAction("ライトフラット", self, checkable=True)
+        theme5_toggle.triggered.connect(lambda:self.toggle_theme(5))
+        if(num == 5):
+            theme5_toggle.setChecked(True) 
+            
+        else:
+            theme5_toggle.setChecked(False) 
+        self.setting_menu.addAction(theme5_toggle)
+
+        theme6_toggle = QAction("ダークフラット", self, checkable=True)
+        theme6_toggle.triggered.connect(lambda:self.toggle_theme(6))
+        if(num == 6):
+            theme6_toggle.setChecked(True) 
+            
+        else:
+            theme6_toggle.setChecked(False) 
+        self.setting_menu.addAction(theme6_toggle)
+
+
+        self.setting_menu.addSeparator()
         ver_menu = self.menu_bar.addMenu("バージョン")
         version_check = QAction(VERSION, self)
-        ver_menu.addAction(version_check)
+        self.setting_menu.addAction(version_check)
 
-        
+    def view_change(self):
+
+        if self.active_toggle.isChecked():
+            self.cfg.set("active",True)
+            self.label.setFixedHeight(20)
+            self.tree_item.setMaximumHeight(16777215)
+
+     
+        else:
+            self.cfg.set("active",False)
+
+            #self.label.hide()
+            self.label.setFixedHeight(0)
+
+            self.tree_item.setFixedHeight(0)
+
+        if self.tree_toggle.isChecked():
+            self.cfg.set("tree",True)
+
+            self.top_bar.setFixedHeight(30)
+            self.under_bar.setFixedHeight(30)
+            self.tree.setMaximumHeight(16777215)
+            self.tree.setMaximumWidth(16777215)
+        else:
+            self.cfg.set("tree",False)
+            self.top_bar.setFixedHeight(0)
+            self.under_bar.setFixedHeight(0)
+            self.tree.setFixedHeight(0)
+
+        if self.short_toggle.isChecked():
+            self.cfg.set("short",True)
+            self.shortcut_button.setFixedHeight(30)
+            self.tree_widget.setMaximumHeight(16777215)
+    
+
+        else:
+            self.cfg.set("short",False)
+            self.shortcut_button.setFixedHeight(0)
+            self.tree_widget.setFixedHeight(0)
+
+    def first_open_flag(self):
+        self.cfg.set("path", use_qt_dialog=True)
+    def toggle_theme(self,num):
+        self.cfg.set("theme", num)
 
     def update_path_label(self):
         max_width = self.width() - 150  # ボタン等を考慮した余白
         metrics = self.path_label.fontMetrics()
-        elided = metrics.elidedText(f"📁 : {self.current_path}", Qt.ElideLeft, max_width)
+        try:
+            elided = metrics.elidedText(f"📁 : {os.path.basename(self.current_path)}", Qt.ElideLeft, max_width)
+        except Exception as e:
+            elided = "📁"
         self.path_label.setText(elided)
 
-    def go_up(self):
+    def go_up(self,update=True):
+        
+
+        self.tree.blockSignals(True)
+        
         if self.excel_tabs_visible:
             self.populate_tree()
             self.excel_tabs_visible = False
@@ -363,16 +697,22 @@ class FileExplorer(QMainWindow):
                 self.current_path = parent
                 self.tree.setRootIndex(self.model.index(self.current_path))
                 self.update_path_label()
+            if(update):
+                self.add_to_history(parent)
 
         if(self.excel_openflag):
             self.excel_openflag = False
             
             #self.excel_app.Quit() #エクセルを消したいときは
             self.excel_app = None
+        self.tree.blockSignals(False)
 
 
     def on_tree_clicked(self, index):
+        self.tree.blockSignals(True)
+        
         self.tree.expand(index)
+        
         if (self.excel_openflag and self.excel_app):
             try:
 
@@ -382,36 +722,51 @@ class FileExplorer(QMainWindow):
             except  Exception as e:
                 QMessageBox.warning(self, "Excelエラー", f"Excelファイルの処理中にエラーが発生しました:\n{e}")
                 self.go_up()
-
+        self.tree.blockSignals(False)
     def on_tree_double_clicked(self, index):
+        
+        self.tree.blockSignals(True)
         self.tree.expand(index)
         
+
         if(not self.excel_openflag and not self.excel_app):
             path = self.model.filePath(index)
 
             ext = os.path.splitext(path)[1].lower()
             if not os.path.isdir(path):
-                if self.excel_enabled and ext in [".xls", ".xlsx"]:
+                if self.excel_enabled and ext in [".xls", ".xlsx",".xlsm"]:
                     self.handle_excel_file(path)
                 else:
                     self.open_with_default_app(path)
+        self.tree.blockSignals(False)
+
+    def on_tree_load_clicked(self, path,update=True):
+        self.last_open_path = path
+        if(update):
+            tdy = datetime.date.today() 
+            fname = os.path.basename(path)
+            self.histry_index.append((fname, tdy, path))
+
+            save_histry(self.histry_index)
 
 
-    def on_tree_load_clicked(self, path):
-        
-        
+        self.go_up(False)
+        if(update):
+            self.add_to_history(path)
+
         if(not self.excel_openflag and not self.excel_app):
-            #path = self.model.filePath(index)
+
             if os.path.isdir(path):
                 self.current_path = path
                 self.tree.setRootIndex(self.model.index(path))
                 self.update_path_label()
             else:
                 ext = os.path.splitext(path)[1].lower()
-                if self.excel_enabled and ext in [".xls", ".xlsx"]:
+                if self.excel_enabled and ext in [".xls", ".xlsx",".xlsm"]:
                     self.handle_excel_file(path)
                 else:
-                    self.open_with_default_app(path)           
+                    self.open_with_default_app(path)    
+        self.tree.blockSignals(False)
 
     def handle_excel_file(self, path):
         try:
@@ -462,8 +817,10 @@ class FileExplorer(QMainWindow):
             QMessageBox.warning(self, "シート切り替えエラー", str(e))
 
     def open_with_default_app(self, path):
+        
         try:
             if sys.platform == 'win32':
+                path = path.replace("/","\\")
                 os.startfile(path)
             elif sys.platform == 'darwin':
                 subprocess.Popen(['open', path])
@@ -479,21 +836,34 @@ class FileExplorer(QMainWindow):
             self.tree.setRootIndex(self.model.index(self.current_path))
             self.update_path_label()
 
-    def change_font_size(self):
-        size, ok = QInputDialog.getInt(self, "フォントサイズ変更", "新しいフォントサイズ:", 10, 6, 40)
-        if ok:
+    def change_font_size(self,question):
+        ok = False
+        if(question):
+            size, ok = QInputDialog.getInt(self, "フォントサイズ変更", "新しいフォントサイズ:", self.cfg.get("size"), 6, 40)
+        else:
+            size = self.cfg.get("size")
+
+        if(ok) or (not question):
             font = self.tree.font()
             font.setPointSize(size)
             self.tree.setFont(font)
+            self.under_bar.setFont(font)
             self.path_label.setFont(font)
             self.tree_item.setFont(font)
             self.tree_widget.setFont(font)
             self.label2.setFont(font)
             self.label.setFont(font)
             self.back_button.setFont(font)
+            self.menu_bar.setFont(font)
+            self.file_menu.setFont(font)
+            self.favorite_menu.setFont(font)
+            self.setting_menu.setFont(font)
+            self.shortcut_button.setFont(font)
+            self.cfg.set("size", size)
 
     def toggle_always_on_top(self, checked):
         self.always_on_top = checked
+        self.cfg.set("front",self.always_on_top)
         flags = self.windowFlags()
         if self.always_on_top:
             self.setWindowFlags(flags | Qt.WindowStaysOnTopHint)
@@ -502,6 +872,7 @@ class FileExplorer(QMainWindow):
         self.show()
 
     def toggle_excel(self, checked):
+        self.cfg.set("excel",checked)
         self.excel_enabled = checked
 
 
@@ -742,6 +1113,40 @@ class FileExplorer(QMainWindow):
         self.excel_app.Quit()
         self.go_up()
 
+    def add_to_history(self, path):
+        # 進んだ後に新しい履歴が追加されたら、その先の履歴は消す
+        if self.history_index < len(self.history) - 1:
+            self.history = self.history[:self.history_index + 1]
+            
+            self.redo_button.setEnabled(False)
+        if os.path.isdir(path):
+            self.undo_button.setEnabled(True)
+            self.history.append(path)
+            self.history_index += 1
+
+
+    def go_back(self):
+
+        if self.history_index > 0:
+            self.history_index = self.history_index-1
+            path = self.history[self.history_index]
+            if os.path.exists(path):
+                self.redo_button.setEnabled(True)
+                self.on_tree_load_clicked(path,False)
+
+        else:
+            self.undo_button.setEnabled(False)
+
+    def go_forward(self):
+
+        if self.history_index < len(self.history)-1 :
+            self.history_index += 1
+            path = self.history[self.history_index]
+            if os.path.exists(path):
+                self.undo_button.setEnabled(True)
+                self.on_tree_load_clicked(path,False)
+        else:
+            self.redo_button.setEnabled(False)
 
     #上ビュー------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     def changeEvent(self, event):
@@ -749,6 +1154,7 @@ class FileExplorer(QMainWindow):
             if self.isActiveWindow():
                 self.populate_windows()
         super().changeEvent(event)
+        
     #'''
 
     def populate_windows(self):
@@ -1019,7 +1425,7 @@ class FileExplorer(QMainWindow):
                     print(f"アクティブ化失敗: {e}")
         self.populate_windows()
 
-    def item_context_menu(self,position):#編集
+    def item_context_menu(self,position):
         index = self.tree_item.indexAt(position)
         if not index.isValid():
                 return
@@ -1043,6 +1449,15 @@ class FileExplorer(QMainWindow):
 
 
     #ここからショートカットビュー--------------------------------------------------------------------
+    def shortcut_setting_changed(self):
+        self.pastpass = not self.pastpass
+        if(self.pastpass):
+            self.shortcut_button.setText("🔎履歴")
+        else:
+            self.shortcut_button.setText("🔎ショートカット")
+        self.refresh_from_config()
+
+
     def create_menu(self):
         menubar = self.menuBar()
         config_menu = menubar.addMenu("コンフィグ")
@@ -1095,9 +1510,14 @@ class FileExplorer(QMainWindow):
 
     def refresh_from_config(self):
         try:
-            self.shortcuts = load_config()
+            self.tree_widget.clear()
+            
+            if(self.pastpass):
+                self.shortcuts = None
+                self.shortcuts = load_histry()
+            else:
+                self.shortcuts = load_config()
             self.populate_shortcut()
-            #QMessageBox.information(self, "反映完了", "コンフィグを再読み込みしました。")
         except Exception as e:
             QMessageBox.critical(self, "エラー", f"コンフィグ読み込みエラー:\n{e}")
 
@@ -1105,23 +1525,21 @@ class FileExplorer(QMainWindow):
         
         try:
             path = item.data(0, Qt.UserRole)
-            #print(path)
+
             if path:
 
-                #if(path in [".xls", ".xlsx"] or os.path.exists(path)):
-                    if(os.path.isdir(path)):
-                        
+                if(os.path.isdir(path)):
+                    
+                    self.go_up()
+                    self.on_tree_load_clicked(path)
+                elif(os.path.isfile(path)):
+                    
+                    if( path.endswith((".xls", ".xlsx"))):
                         self.go_up()
                         self.on_tree_load_clicked(path)
-                    elif(os.path.isfile(path)):
-                        #self.go_up()
+                    else:
                         
-                        if( path.endswith((".xls", ".xlsx"))):
-                            self.go_up()
-                            self.on_tree_load_clicked(path)
-                        else:
-                            
-                            os.startfile(path)
+                        os.startfile(path)
         except Exception as e:
             print(e)
             pass
@@ -1184,7 +1602,6 @@ class FileExplorer(QMainWindow):
         if urls:
             path = urls[0].toLocalFile()
             self.open_register_dialog(path)
-            #print(path)
 
     def show_tree_in_messagebox(self):
         """現在のツリーをテキスト化してメッセージボックスで表示"""
@@ -1204,7 +1621,7 @@ class FileExplorer(QMainWindow):
         box.exec_()
 
     def collect_tree_text(self, index=None, indent=0) -> str:
-        """再帰的にツリーの「表示名」を文字列化"""#編集
+        """再帰的にツリーの「表示名」を文字列化"""
 
         """Excelのシート一覧をprint出力"""
 
@@ -1262,12 +1679,96 @@ def show_save_dialog(defult_name):
         print("キャンセルされました")
         return None
 
+class ConfigManager:
+    def __init__(self, filepath="config.json", default_data=None):
+        """
+        filepath: 保存するJSONファイル名
+        default_data: 初期データ（辞書型）
+        """
+        self.filepath = filepath
+        self.data = default_data if default_data is not None else {}
+        self.load_or_create()
+
+    def load_or_create(self):
+        """ファイルがあれば読み込む。なければ作成して保存"""
+        if os.path.exists(self.filepath):
+            try:
+                with open(self.filepath, "r", encoding="utf-8") as f:
+                    self.data = json.load(f)
+            except json.JSONDecodeError:
+                print("JSON読み込み失敗。デフォルトで作成します。")
+                self.save()
+        else:
+            print("コンフィグが存在しないため新規作成します。")
+            self.save()
+
+    def save(self):
+        """辞書型データをファイルに保存"""
+        try:
+            with open(self.filepath, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"保存に失敗しました: {e}")
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+    def set(self, key, value=None, use_qt_dialog=False):
+        """
+        値を設定。
+        key == "path" の場合、use_qt_dialog=True なら フォルダ選択ダイアログ を開く
+        """
+        if key == "path" and use_qt_dialog:
+            app = QApplication.instance()
+            if app is None:  # まだQApplicationがない場合は作成
+                app = QApplication([])
+
+            folder_path = QFileDialog.getExistingDirectory(
+                None, "フォルダを選択してください", ""
+            )
+            if folder_path:
+                self.data[key] = folder_path
+                self.save()
+        else:
+            self.data[key] = value
+            self.save()
+
+#def theamer_color(color):
+
+
 
 
 
 if __name__ == "__main__":
+
+
+
+    
+
     app = QApplication(sys.argv)
-    app.setStyleSheet(qdarkstyle.load_stylesheet())
+    
+    cfg = ConfigManager("setting.json", default_data=default_cfg)
+    num = cfg.get("theme")
+    if(num == 2):
+        app.setStyleSheet(qdarkstyle.load_stylesheet())
+    elif(num == 3):
+        apply_stylesheet(app, theme='light_blue.xml')
+    elif(num == 4):
+        apply_stylesheet(app, theme='dark_lightgreen.xml')    
+    elif(num == 5):
+        apply_stylesheet(app, theme='light_cyan_500.xml')
+    elif(num == 6):
+        apply_stylesheet(app, theme='dark_amber.xml')   
+    '''
+    elif(num == 7):
+        qtmodern.styles.light(app)   # lightテーマ（darkもある）
+        mw = qtmodern.windows.ModernWindow(win)
+    elif(num == 8):
+        qtmodern.styles.light(app)   # lightテーマ（darkもある）
+        mw = qtmodern.windows.ModernWindow(win)
+    #app.setStyleSheet(qdarkstyle.load_stylesheet())
+    ''' 
     window = FileExplorer()
     window.show()
+    
     sys.exit(app.exec_())

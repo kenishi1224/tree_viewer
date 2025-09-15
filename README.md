@@ -4,7 +4,7 @@ This application implements a tree view using Python and has advanced features (
 
 # Python ファイルツリーエクスプローラー
 
-このアプリは PyQt5 を用いて構築された、シンプルで直感的な ファイルエクスプローラーです。  
+このアプリは PyQt6 を用いて構築された、シンプルで直感的な ファイルエクスプローラーです。  
 サイドバーのような使いやすさかつ機能性重視を目指して設計しました。
 
 ![Image 1](/image/tree_viewer01.png)

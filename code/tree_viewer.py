@@ -11,13 +11,13 @@ import win32process
 import win32con
 import csv
 import win32com.client
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QMenuBar, QTextEdit,
-    QTreeWidget,QAction, QFileDialog, QInputDialog, QPushButton, QHBoxLayout, QLineEdit,QTextEdit,
-    QMessageBox, QTreeView, QFileSystemModel, QMenu, QSplitter, QLabel, QAbstractItemView, QDialog, QTreeWidgetItem,QFileIconProvider,QSizePolicy
+    QTreeWidget, QFileDialog, QInputDialog, QPushButton, QHBoxLayout, QLineEdit,QTextEdit,
+    QMessageBox, QTreeView, QMenu, QSplitter, QLabel, QAbstractItemView, QDialog, QTreeWidgetItem,QFileIconProvider,QSizePolicy
 )
-from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap,QTextOption,QPixmapCache
-from PyQt5.QtCore import Qt, QDir, QPoint,QTimer, QEvent
+from PyQt6.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap,QTextOption,QPixmapCache,QAction , QFileSystemModel
+from PyQt6.QtCore import Qt, QDir, QPoint,QTimer, QEvent
 import qdarkstyle
 from pathlib import Path
 import json
@@ -26,16 +26,7 @@ import qtmodern.styles
 import qtmodern.windows
 import datetime
 
-default_cfg = {
-    "firstpass": "C:/",
-    "active":True,
-    "tree":True,
-    "short":True,
-    "theme": 1,
-    "excel": True,
-    "size": 10,
-    "front": True
-}
+
 
 VERSION = "Va02"
 
@@ -202,21 +193,18 @@ class FileExplorer(QMainWindow):
         self.setGeometry(0, 0, 300, 1200)
 
         self.setAcceptDrops(True)  # ドラッグ&ドロップを受け付ける
-        QPixmapCache.setCacheLimit(51200)
+        #QPixmapCache.setCacheLimit(51200)
         
 
-        self.qApp = QApplication.instance()
-        self.qApp.applicationStateChanged.connect(self.on_app_state_changed)
+        #self.qApp = QApplication.instance()
+        #self.qApp.applicationStateChanged.connect(self.on_app_state_changed)
 
 
 
-        self.cfg = ConfigManager("setting.json", default_data=default_cfg)
+        self.cfg = ConfigManager("set.json", default_data=default_cfg)
 
         self.history = []       # 移動したパスを格納
         self.history_index = -1 # 現在の位置を指す
-
-        
-
 
         self.catagory_bunrui = ""
 
@@ -285,6 +273,7 @@ class FileExplorer(QMainWindow):
         self.redo_button.clicked.connect(self.go_forward)
         self.path_label2 = QLabel()
 
+        self.under_bar.addWidget(self.undo_button)
         self.under_bar.addWidget(self.reload_button)
         self.under_bar.addWidget(self.redo_button)
         
@@ -397,7 +386,7 @@ class FileExplorer(QMainWindow):
 
 
         start_path = os.getcwd()
-        start_path =self.cfg.get("path")
+        start_path =self.cfg.get("firstpass")
 
         self.model.setRootPath(start_path)
         self.tree.setRootIndex(self.model.index(start_path))
@@ -442,7 +431,7 @@ class FileExplorer(QMainWindow):
             self.reset_waitmode = False
             self.tree.setModel(self.model)
             if  not self.last_open_path :
-                start_path =self.cfg.get("path")
+                start_path =self.cfg.get("firstpass")
 
                 self.model.setRootPath(start_path)
                 self.tree.setRootIndex(self.model.index(start_path))
@@ -670,7 +659,7 @@ class FileExplorer(QMainWindow):
             self.tree_widget.setFixedHeight(0)
 
     def first_open_flag(self):
-        self.cfg.set("path", use_qt_dialog=True)
+        self.cfg.set("firstpass", use_qt_dialog=True)
     def toggle_theme(self,num):
         self.cfg.set("theme", num)
 
@@ -859,11 +848,11 @@ class FileExplorer(QMainWindow):
             self.favorite_menu.setFont(font)
             self.setting_menu.setFont(font)
             self.shortcut_button.setFont(font)
-            self.cfg.set("size", size)
+            cfg.set("size", size)
 
     def toggle_always_on_top(self, checked):
         self.always_on_top = checked
-        self.cfg.set("front",self.always_on_top)
+        cfg.set("front",self.always_on_top)
         flags = self.windowFlags()
         if self.always_on_top:
             self.setWindowFlags(flags | Qt.WindowStaysOnTopHint)
@@ -1582,13 +1571,28 @@ class FileExplorer(QMainWindow):
                 
                 menu.addSeparator()
             
+            
+
             newopen_action = QAction("デフォルトのアプリで開く", self)
-            newopen_action.triggered.connect(lambda: os.startfile(path))
+            newopen_action.triggered.connect(lambda: self.shortcut_passopen(path))
             menu.addAction(newopen_action)
+
+            if(os.path.isfile(path)):
+
+                popen_action = QAction("フォルダを開く", self)
+                popen_action.triggered.connect(lambda: self.shortcut_passopen(os.path.dirname(path)))
+                menu.addAction(popen_action)
+
 
             menu.exec_(self.tree_widget.viewport().mapToGlobal(position))
         except Exception as e:
             pass
+
+    def shortcut_passopen(self,path):    
+        try:
+            os.startfile(path)
+        except Exception as e:
+            QMessageBox.critical(None, "エラー", f":\n{e}")
 
     #新規
     # ドラッグ受け入れ
@@ -1607,7 +1611,7 @@ class FileExplorer(QMainWindow):
         """現在のツリーをテキスト化してメッセージボックスで表示"""
         text = self.collect_tree_text()
         
-        from PyQt5.QtWidgets import QMessageBox, QTextEdit
+        from PyQt6.QtWidgets import QMessageBox, QTextEdit
         
         box = QMessageBox(self)
         box.setWindowTitle("ツリー出力")
@@ -1686,6 +1690,7 @@ class ConfigManager:
         default_data: 初期データ（辞書型）
         """
         self.filepath = filepath
+        print(filepath)
         self.data = default_data if default_data is not None else {}
         self.load_or_create()
 
@@ -1706,7 +1711,8 @@ class ConfigManager:
         """辞書型データをファイルに保存"""
         try:
             with open(self.filepath, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, ensure_ascii=False, indent=4)
+                print(self.data)
+                json.dump(self.data, f, ensure_ascii=False)
         except Exception as e:
             print(f"保存に失敗しました: {e}")
 
@@ -1716,9 +1722,12 @@ class ConfigManager:
     def set(self, key, value=None, use_qt_dialog=False):
         """
         値を設定。
-        key == "path" の場合、use_qt_dialog=True なら フォルダ選択ダイアログ を開く
+        key == "firstpass" の場合、use_qt_dialog=True なら フォルダ選択ダイアログ を開く
         """
-        if key == "path" and use_qt_dialog:
+        print(key,value)
+        if isinstance(value, Qt.CheckState):
+            value = (value == Qt.CheckState.Checked)
+        if key == "firstpass" and use_qt_dialog:
             app = QApplication.instance()
             if app is None:  # まだQApplicationがない場合は作成
                 app = QApplication([])
@@ -1733,21 +1742,27 @@ class ConfigManager:
             self.data[key] = value
             self.save()
 
-#def theamer_color(color):
-
 
 
 
 
 if __name__ == "__main__":
-
-
-
-    
-
+    default_cfg = {
+        "firstpass": "C:/",
+        "active":True,
+        "tree":True,
+        "short":True,
+        "theme": 1,
+        "excel": True,
+        "size": 10,
+        "front": True
+    }
     app = QApplication(sys.argv)
+
     
-    cfg = ConfigManager("setting.json", default_data=default_cfg)
+    cfg = ConfigManager("set.json", default_data=default_cfg)
+    
+    
     num = cfg.get("theme")
     if(num == 2):
         app.setStyleSheet(qdarkstyle.load_stylesheet())
